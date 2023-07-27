@@ -1,0 +1,416 @@
+---
+title: "Фінансовий звіт за `r lubridate::quarter(lubridate::floor_date(lubridate::today(), unit = 'quarter')) - 1`-ий квартал `r lubridate::year(lubridate::floor_date(lubridate::today(), unit = 'quarter') - months(3))`"
+output: 
+  flexdashboard::flex_dashboard:
+    logo: "data/logo.png"
+    css: "custom.css"
+    orientation: rows
+    vertical_layout: scroll
+    theme:
+      version: 4
+      primary: "red"
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(formattable)
+library(reactablefmtr)
+library(DBI)
+library(odbc)
+library(dbplyr)
+```
+
+```{r preparation}
+source("script/collect_data.R")
+source("script/functions.R")
+
+theme_set(theme_minimal())
+
+date_finish <- floor_date(Sys.Date(), unit = "quarter")
+
+date_start <- date_finish - months(15)
+
+con_db <- connect_to_db()
+
+ref_items <- get_ref_items()
+
+sale_data <- get_sale_data(date_start, date_finish)
+
+expenses_data <- get_expenses(date_start, date_finish) %>% 
+    filter(!expenses_subgroup %in% "Курсові різниці")
+
+inventory_data <- get_inventory_data(date_start, date_finish)
+
+cash_data <-get_cash_data(date_start, date_finish)
+
+debt_data <- get_debt_data(date_start, date_finish)
+
+accountable_person_data <- get_accountable_person(date_start, date_finish)
+
+payroll_taxes_data <- get_payroll_taxes_data(date_start, date_finish)
+
+payroll_debt_data <- get_payroll_debt_data(date_start, date_finish)
+
+taxes_debt_data <- get_taxes_debt_data(date_start, date_finish)
+
+pnl_data <- get_pnl(sale_data, expenses_data)
+
+expenses_detailed <- get_expenses_detailed(expenses_data)
+
+balance_tbl <- get_balance_tbl(cash_data, accountable_person_data,
+                               payroll_taxes_data, payroll_debt_data,
+                               taxes_debt_data, inventory_data)
+
+working_capital <- get_working_capital(balance_tbl)
+
+pnl_balance_ratios <- get_pnl_balance_ratios(pnl_data, working_capital)
+
+balance_tbl_finish <- get_balance_tbl_finish(balance_tbl)
+```
+
+
+Звіт з прибутку {data-icon="fa-money-check-dollar"}
+=======================================================================
+
+Row {data-height=120}
+-----------------------------------------------------------------------
+
+### Дохід від продажів (млн.грн)
+
+```{r}
+valueBox(
+  value = round(pnl_data[[6]][[3]] / 1000, 2),
+  icon  = case_when(
+                    pnl_data[[6]][[3]] > pnl_data[[2]][[3]]  ~ "fa-up-long",
+                    pnl_data[[6]][[3]] < pnl_data[[2]][[3]]  ~ "fa-down-long",
+                    ),
+  color = case_when(
+                    pnl_data[[6]][[3]] > pnl_data[[2]][[3]] * 1.1  ~ "success",
+                    pnl_data[[6]][[3]] > pnl_data[[2]][[3]]        ~ "warning",
+                    pnl_data[[6]][[3]] < pnl_data[[2]][[3]]        ~ "danger"
+                    )
+)
+```
+
+### Дохід від продажів {data-width=250, .no-title}
+```{r}
+pnl_data %>% 
+    slice(3) %>% 
+    select(1:6) %>% 
+    pivot_longer(cols = 2:6, names_to = "date") %>% 
+    ggplot(aes(x=date, y=value/1000)) +
+    geom_col(fill = "#048B9F") +
+    labs(x = "", y= "") +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank())
+```
+
+
+### Рентабельність продажів
+
+```{r}
+valueBox(
+  value = round(pnl_data[[6]][[6]] * 100, 1),
+  icon  =  "fa-percent",
+  color = case_when(
+                    pnl_data[[6]][[6]] >  pnl_data[[2]][[6]]  ~ "success",
+                    pnl_data[[6]][[6]] <= pnl_data[[2]][[6]]  ~ "warning"
+                    )
+)
+```
+
+### Рентабельність продажів {data-width=250, .no-title}
+```{r}
+pnl_data %>% 
+    slice(6) %>% 
+    select(1:6) %>% 
+    pivot_longer(cols = 2:6, names_to = "date") %>% 
+    ggplot(aes(x=date, y=value)) +
+    geom_col(fill = "#048B9F") +
+    # scale_y_continuous(label = scales::percent) +
+    labs(x = "", y= "") +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank())
+```
+
+### Рентабельність чистого прибутку
+
+```{r}
+valueBox(
+  value = round(pnl_data[[6]][[10]] * 100, 1),
+  icon  =  "fa-percent",
+  color = case_when(
+                    pnl_data[[6]][[10]] >  pnl_data[[2]][[10]]  ~ "success",
+                    pnl_data[[6]][[10]] <= pnl_data[[2]][[10]]  ~ "warning"
+                    )
+)
+```
+
+### Рентабельність чистого прибутку {data-width=250, .no-title}
+```{r}
+pnl_data %>% 
+    slice(10) %>% 
+    select(1:6) %>% 
+    pivot_longer(cols = 2:6, names_to = "date") %>% 
+    ggplot(aes(x=date, y=value)) +
+    geom_col(fill = "#048B9F") +
+    # scale_y_continuous(label = scales::percent) +
+    labs(x = "", y= "") +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank())
+```
+
+
+Row {data-height=800}
+-----------------------------------------------------------------------
+
+### Звіт з прибутку за останні 5-ть кварталів {data-width=500}
+
+```{r}
+pnl_data %>% 
+    select(-index) %>%
+    rename("Показник" = group) %>% 
+    formattable(align = c("l",rep("r", 7)),
+                list(
+                     `TP` = formatter("span", style = x ~ style(
+                         color = case_when(
+                             x <= 1 & !"Показник" %in% c("Собівартість",
+                                                         "Витрати") ~ "red",
+                             .default = "green"))),
+                     `Частка` = formatter("span", x ~ percent(x, digits = 1)),
+                     area(row = c(6,10), col = 8) ~ function(x) x = "",
+                     area(row = c(6,10), col = 2:6) ~ function(x) percent(x, digits = 1),
+                     area(row = c(1:5,7:9), col = 2:6) ~ function(x) prettyNum(x, small.interval = 1L, big.mark = "'"),
+                     area(row = c(5,9), col = 1:6) ~ formatter("span",
+                                                               style = ~ style("font-weight" = "bold"))
+                     )
+    )
+```
+
+
+<!-- Аналіз витрат {data-icon="fa-chart-bar"} -->
+<!-- ======================================================================= -->
+
+### Аналіз витрат за останні 5-ть кварталів {data-width=500}
+
+```{r}
+expenses_detailed %>% 
+    reactable(
+        pagination = FALSE,
+        #fullWidth = FALSE,
+        columns = list(
+            expenses_group = colDef(name = "Стаття витрат",
+                                    minWidth = 125,
+                                    style = JS("function(rowInfo, column, state) {
+                                      const firstSorted = state.sorted[0]
+                                      // Merge cells if unsorted or sorting by expenses_group
+                                      if (!firstSorted || firstSorted.id === 'expenses_group') {
+                                        const prevRow = state.pageRows[rowInfo.viewIndex - 1]
+                                        if (prevRow && rowInfo.values['expenses_group'] === prevRow['expenses_group']) {
+                                          return { visibility: 'hidden' }
+                                        }
+                                      }
+                                    }")
+                                   ),
+            expenses_subgroup = colDef(name = "Елемент витрат",
+                                       minWidth = 125),
+            change = colDef(name = "TP",
+                            style = function(value) {
+                                if (value < pnl_data$TP[3]) {
+                                    color <- "#008000"
+                                } else {
+                                    color <- "#e00000"
+                                }
+                                list(color = color, fontWeight = "bold")
+                            },
+                            maxWidth = 80
+            ),
+            prop = colDef(name = "Частка",
+                          format = colFormat(percent = TRUE, digits = 1),
+                          maxWidth = 80
+            ),
+            expenses_sum = colDef(
+                name = "Сума витрат за квартал (тис.грн)",
+                cell = react_sparkbar(
+                    .,
+                    height = 35,
+                    min_value = 10,
+                    #max_value = 225,
+                    fill_color = "#9f9f9f",
+                    #labels = c("first", "last"),
+                    #label_size = "0.8em",
+                    highlight_bars =  highlight_bars(first = "lightblue", last = "steelblue"),
+                    tooltip_type = 2
+                )
+            )
+        ),
+        outlined = TRUE
+    )
+```
+
+
+Обіговий капітал {data-icon="fa-table"}
+=======================================================================
+
+Row {data-height=120}
+-----------------------------------------------------------------------
+
+### Коефіцієнт миттєвої ліквідності(>1)
+
+```{r}
+valueBox(
+  value = working_capital$quick_ratio[6],
+  icon  = "fa-wallet",
+  color = case_when(
+                    working_capital$quick_ratio[6] >= 1  ~ "success",
+                    working_capital$quick_ratio[6] >= 0.9    ~ "warning",
+                    working_capital$quick_ratio[6] <  0.8    ~ "danger"
+                    )
+)
+```
+
+### Коефіцієнт миттєвої ліквідності {data-width=200, .no-title}
+
+```{r}
+working_capital %>%
+    ggplot(aes(x = date, y = quick_ratio)) +
+    geom_col(fill = "#048B9F") +
+    labs(x = "", y = "") +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank())
+```
+
+
+### Період обороту запасів (<60дн)
+
+```{r}
+valueBox(
+  value = pnl_balance_ratios$inventory_turnover[5],
+  icon  = "fa-dolly",
+  color = case_when(
+                    pnl_balance_ratios$inventory_turnover[5] >= 90  ~ "danger",
+                    pnl_balance_ratios$inventory_turnover[5] >= 60  ~ "warning",
+                    pnl_balance_ratios$inventory_turnover[5] <  60  ~ "success"
+                    )
+)
+```
+
+### Період обороту запасів {data-width=200, .no-title}
+
+```{r}
+pnl_balance_ratios %>%
+    ggplot(aes(x = date, y = inventory_turnover)) +
+    geom_col(fill = "#048B9F") +
+    labs(x = "", y = "") +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank())
+```
+
+### Період обороту дебіт.заборг (<7)
+
+```{r}
+valueBox(
+  value = pnl_balance_ratios$receivable_turnover[5],
+  icon  = "fa-users",
+  color = case_when(
+                    pnl_balance_ratios$receivable_turnover[5] >= 10  ~ "danger",
+                    pnl_balance_ratios$receivable_turnover[5] >=  7  ~ "warning",
+                    pnl_balance_ratios$receivable_turnover[5] <   7  ~ "success"
+                    )
+)
+```
+
+### Період обороту дебіт.заборг {data-width=200, .no-title}
+
+```{r}
+pnl_balance_ratios %>%
+    ggplot(aes(x = date, y = receivable_turnover)) +
+    geom_col(fill = "#048B9F") +
+    labs(x = "", y = "") +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank())
+```
+
+### Рентабельність обігового капіталу (>25)
+
+```{r}
+valueBox(
+  value = pnl_balance_ratios$working_capital_profitibility[5]*100,
+  icon  = "fa-percent",
+  color = case_when(
+                    pnl_balance_ratios$working_capital_profitibility[5] <= .1  ~ "danger",
+                    pnl_balance_ratios$working_capital_profitibility[5] <= .2  ~ "warning",
+                    pnl_balance_ratios$working_capital_profitibility[5] >  .2  ~ "success"
+                    )
+)
+```
+
+### Рентабельність обігового капіталу {data-width=200, .no-title}
+
+```{r}
+pnl_balance_ratios %>%
+    ggplot(aes(x = date, y= working_capital_profitibility)) +
+    geom_col(fill = "#048B9F") +
+    labs(x = "", y = "") +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank())
+```
+
+
+Row {data-height=800}
+-----------------------------------------------------------------------
+### Звіт з обігового капіталу
+
+```{r}
+balance_tbl_finish %>%    
+    reactable(
+        pagination = FALSE,
+        #striped = TRUE,
+        rowStyle = function(index) {
+            if (index %in% c(1, 9, 16)) {
+                list(background = "rgba(0, 0, 0, 0.05)",
+                     fontWeight = "bold")
+            }
+        },
+        defaultColDef = colDef(format = colFormat(separators = TRUE)),
+        #groupBy = c("main_group", "group"),
+        columns = list(
+            main_group = colDef(name = "Стаття",
+                                minWidth = 150,
+                                style = JS("function(rowInfo, column, state) {
+                                      const firstSorted = state.sorted[0]
+                                      // Merge cells if unsorted or sorting by main_group
+                                      if (!firstSorted || firstSorted.id === 'main_group') {
+                                        const prevRow = state.pageRows[rowInfo.viewIndex - 1]
+                                        if (prevRow && rowInfo.values['main_group'] === prevRow['main_group']) {
+                                          return { visibility: 'hidden' }
+                                        }
+                                      }
+                                    }")
+            ),
+            group = colDef(name = "Група",
+                           minWidth = 150,
+                           style = JS("function(rowInfo, column, state) {
+                                      const firstSorted = state.sorted[0]
+                                      // Merge cells if unsorted or sorting by group
+                                      if (!firstSorted || firstSorted.id === 'group') {
+                                        const prevRow = state.pageRows[rowInfo.viewIndex - 1]
+                                        if (prevRow && rowInfo.values['group'] === prevRow['group']) {
+                                          return { visibility: 'hidden' }
+                                        }
+                                      }
+                                    }")),
+            subgroup = colDef(name = "Підгрупа",
+                              minWidth = 150)
+            )
+    )
+```
+
